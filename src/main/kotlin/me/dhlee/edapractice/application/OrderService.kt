@@ -4,12 +4,13 @@ import me.dhlee.edapractice.domain.Order
 import me.dhlee.edapractice.domain.OrderLine
 import me.dhlee.edapractice.domain.OrderLineRepository
 import me.dhlee.edapractice.domain.OrderRepository
-import me.dhlee.edapractice.domain.Payment
-import me.dhlee.edapractice.domain.PaymentRepository
 import me.dhlee.edapractice.domain.PriceRepository
 import me.dhlee.edapractice.domain.ProductRepository
 import me.dhlee.edapractice.domain.StockRepository
+import me.dhlee.edapractice.domain.event.OrderCreatedEvent
 import me.dhlee.edapractice.dto.OrderRequest
+import org.slf4j.LoggerFactory
+import org.springframework.context.ApplicationEventPublisher
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
 
@@ -20,10 +21,13 @@ class OrderService(
     private val priceRepository: PriceRepository,
     private val orderRepository: OrderRepository,
     private val orderLineRepository: OrderLineRepository,
-    private val paymentRepository: PaymentRepository,
+    private val eventPublisher: ApplicationEventPublisher,
 ) {
+    private val log = LoggerFactory.getLogger(javaClass)
+
     @Transactional
     fun processOrder(request: List<OrderRequest>):Long {
+        log.info("===================주문 생성 시작===================")
         val sortedRequest = request.sortedBy { it.productId }
         val productIds = sortedRequest.map { it.productId }.sorted()
         val products = productRepository.findAllById(productIds)
@@ -62,7 +66,9 @@ class OrderService(
             )
         }
 
-        paymentRepository.save(Payment(orderId, orderAmount))
+        eventPublisher.publishEvent(OrderCreatedEvent(orderId, orderAmount))
+
+        log.info("===================주문 생성 종료===================")
         return orderId
     }
 }

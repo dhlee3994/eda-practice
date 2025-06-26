@@ -12,10 +12,12 @@ import me.dhlee.edapractice.domain.StockRepository
 import me.dhlee.edapractice.dto.OrderRequest
 import org.assertj.core.api.Assertions.assertThat
 import org.assertj.core.api.Assertions.assertThatThrownBy
+import org.awaitility.Awaitility.await
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.context.SpringBootTest
+import java.util.concurrent.TimeUnit
 
 @SpringBootTest
 class OrderServiceTest {
@@ -83,16 +85,19 @@ class OrderServiceTest {
         assertThat(orderLines[1].quantity).isEqualTo(3)
         assertThat(orderLines[1].price).isEqualTo(2000)
 
-        // 결제 확인
-        val payments = paymentRepository.findAllByOrderId(orderId)
-        assertThat(payments).hasSize(1)
-        assertThat(payments[0].amount).isEqualTo(8000)
-
         // 재고 감소 확인
         val updatedStock1 = stockRepository.findByProductId(product1.id!!).orElseThrow()
         val updatedStock2 = stockRepository.findByProductId(product2.id!!).orElseThrow()
         assertThat(updatedStock1.quantity).isEqualTo(8) // 10 - 2
         assertThat(updatedStock2.quantity).isEqualTo(17) // 20 - 3
+
+        // 결제 확인
+        await().atMost(5, TimeUnit.SECONDS)
+            .untilAsserted {
+                val payments = paymentRepository.findAllByOrderId(orderId)
+                assertThat(payments).hasSize(1)
+                assertThat(payments[0].amount).isEqualTo(8000)
+            }
     }
 
     @Test
