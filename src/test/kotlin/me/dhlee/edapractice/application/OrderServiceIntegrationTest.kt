@@ -21,6 +21,8 @@ import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.mockito.ArgumentMatchers.anyLong
 import org.mockito.Mockito.doThrow
+import org.mockito.Mockito.times
+import org.mockito.Mockito.verify
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.context.SpringBootTest
 import org.springframework.test.context.bean.override.mockito.MockitoSpyBean
@@ -164,7 +166,7 @@ class OrderServiceIntegrationTest {
     }
 
     @Test
-    fun `결제 생성 실패 전체 플로우`() {
+    fun `결제 생성 실패 전체 플로우 - 모든 재시도 실패`() {
         val product = productRepository.save(Product(name = "노트북"))
         val productId = product.id!!
         stockRepository.save(Stock(productId = productId, quantity = 1))
@@ -175,7 +177,55 @@ class OrderServiceIntegrationTest {
         doThrow(RuntimeException("Payment Error"))
             .`when`(paymentService).createPayment(anyLong(), anyLong())
 
-        val orderId = orderService.processOrder(orderRequests)
+        val orderId = orderService.processOrder(listOf(OrderRequest(productId, 1)))
+
+        await().atMost(15, TimeUnit.SECONDS)
+            .untilAsserted {
+                val order = orderRepository.findById(orderId).get()
+                assertThat(order.status).isEqualTo(OrderStatus.PAYMENT_FAILED)
+
+                val stock = stockRepository.findByProductId(productId).get()
+                assertThat(stock.quantity).isEqualTo(1)
+
+                val payments = paymentRepository.findAllByOrderId(orderId)
+                assertThat(payments).isEmpty()
+
+                verify(paymentService, times(3)).createPayment(anyLong(), anyLong())
+            }
+    }
+
+    @Test
+    fun `결제 생성 재시도 후 성공`() {
+        val product = productRepository.save(Product(name = "노트북"))
+        val productId = product.id!!
+        stockRepository.save(Stock(productId = productId, quantity = 1))
+        priceRepository.save(Price(productId = productId, amount = 1000))
+        doThrow(RuntimeException("Payment Error"))
+            .doThrow(RuntimeException("Payment Error"))
+            .doCallRealMethod()
+            .`when`(paymentService).createPayment(anyLong(), anyLong())
+
+        val orderId = orderService.processOrder(listOf(OrderRequest(productId, 1)))
+
+        await().atMost(15, TimeUnit.SECONDS)
+            .untilAsserted {
+                val payments = paymentRepository.findAllByOrderId(orderId)
+                assertThat(payments).hasSize(1)
+
+                verify(paymentService, times(3)).createPayment(anyLong(), anyLong())
+            }
+    }
+
+    @Test
+    fun `재시도 불가능한 예외는 즉시 실패`() {
+        val product = productRepository.save(Product(name = "노트북"))
+        val productId = product.id!!
+        stockRepository.save(Stock(productId = productId, quantity = 1))
+        priceRepository.save(Price(productId = productId, amount = 1000))
+        doThrow(IllegalArgumentException("Payment Error"))
+            .`when`(paymentService).createPayment(anyLong(), anyLong())
+
+        val orderId = orderService.processOrder(listOf(OrderRequest(productId, 1)))
 
         await().atMost(5, TimeUnit.SECONDS)
             .untilAsserted {
@@ -187,6 +237,8 @@ class OrderServiceIntegrationTest {
 
                 val payments = paymentRepository.findAllByOrderId(orderId)
                 assertThat(payments).isEmpty()
+
+                verify(paymentService, times(1)).createPayment(anyLong(), anyLong())
             }
     }
 }
