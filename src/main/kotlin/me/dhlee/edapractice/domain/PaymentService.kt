@@ -13,6 +13,9 @@ class PaymentService (
     @Transactional
     fun createPayment(orderId: Long, amount: Long) {
         log.info("Creating payment $orderId, $amount")
+        if (amount <= 0) {
+            throw IllegalArgumentException("Invalid payment amount $amount")
+        }
         paymentRepository.save(Payment(orderId, amount))
     }
 }

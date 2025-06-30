@@ -33,4 +33,9 @@ class Stock(
         this.quantity -= quantity
         validate()
     }
+
+    fun increase(quantity: Long) {
+        this.quantity += quantity
+        validate()
+    }
 }

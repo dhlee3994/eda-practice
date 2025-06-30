@@ -71,4 +71,22 @@ class OrderService(
         log.info("===================주문 생성 종료===================")
         return orderId
     }
+
+    @Transactional
+    fun restoreOrder(orderId: Long) {
+        log.info("===================주문 복구 시작===================")
+        val order = orderRepository.findById(orderId)
+            .orElseThrow { IllegalArgumentException("유효하지 않은 주문입니다.") }
+        order.paymentFailed()
+
+        orderLineRepository.findAllByOrderId(orderId).forEach { orderLine ->
+            val productId = orderLine.productId
+            val quantity = orderLine.quantity
+
+            val stock = stockRepository.findByProductId(productId)
+                .orElseThrow { IllegalArgumentException("유효하지 않은 재고입니다.") }
+            stock.increase(quantity)
+        }
+        log.info("===================주문 복구 종료===================")
+    }
 }

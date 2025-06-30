@@ -1,8 +1,12 @@
 package me.dhlee.edapractice.application
 
+import me.dhlee.edapractice.domain.Order
+import me.dhlee.edapractice.domain.OrderLine
 import me.dhlee.edapractice.domain.OrderLineRepository
 import me.dhlee.edapractice.domain.OrderRepository
+import me.dhlee.edapractice.domain.OrderStatus
 import me.dhlee.edapractice.domain.PaymentRepository
+import me.dhlee.edapractice.domain.PaymentService
 import me.dhlee.edapractice.domain.Price
 import me.dhlee.edapractice.domain.PriceRepository
 import me.dhlee.edapractice.domain.Product
@@ -15,12 +19,15 @@ import org.assertj.core.api.Assertions.assertThatThrownBy
 import org.awaitility.Awaitility.await
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
+import org.mockito.ArgumentMatchers.anyLong
+import org.mockito.Mockito.doThrow
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.context.SpringBootTest
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean
 import java.util.concurrent.TimeUnit
 
-@SpringBootTest
-class OrderServiceTest {
+@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
+class OrderServiceIntegrationTest {
 
     @Autowired
     private lateinit var orderService: OrderService
@@ -42,6 +49,9 @@ class OrderServiceTest {
 
     @Autowired
     private lateinit var paymentRepository: PaymentRepository
+
+    @MockitoSpyBean
+    private lateinit var paymentService: PaymentService
 
     @BeforeEach
     fun setUp() {
@@ -118,5 +128,65 @@ class OrderServiceTest {
         assertThat(orderLineRepository.findAll()).hasSize(0)
         assertThat(paymentRepository.findAll()).hasSize(0)
         assertThat(stockRepository.findByProductId(productId).orElseThrow().quantity).isEqualTo(1)
+    }
+
+    @Test
+    fun `주문 복구 성공`() {
+        val product = productRepository.save(Product(name = "노트북"))
+        val productId = product.id!!
+        stockRepository.save(Stock(productId = productId, quantity = 0))
+        priceRepository.save(Price(productId = productId, amount = 1000))
+        val order = orderRepository.save(Order(orderAmount = 1000))
+        val orderId = order.id!!
+        orderLineRepository.save(
+            OrderLine(
+                orderId = orderId,
+                productId = productId,
+                productName = product.name,
+                price = 1000,
+                quantity = 1
+            )
+        )
+
+        orderService.restoreOrder(orderId)
+
+        assertThat(orderRepository.findById(orderId).orElseThrow().status).isEqualTo(OrderStatus.PAYMENT_FAILED)
+        assertThat(stockRepository.findByProductId(productId).orElseThrow().quantity).isEqualTo(1)
+    }
+
+    @Test
+    fun `주문 복구 실패 - 유효하지 않은 주문`() {
+        val orderId = Long.MIN_VALUE
+
+        assertThatThrownBy { orderService.restoreOrder(orderId) }
+            .isInstanceOf(IllegalArgumentException::class.java)
+            .hasMessage("유효하지 않은 주문입니다.")
+    }
+
+    @Test
+    fun `결제 생성 실패 전체 플로우`() {
+        val product = productRepository.save(Product(name = "노트북"))
+        val productId = product.id!!
+        stockRepository.save(Stock(productId = productId, quantity = 1))
+        priceRepository.save(Price(productId = productId, amount = 1000))
+        val orderRequests = listOf(
+            OrderRequest(productId = productId, quantity = 1),
+        )
+        doThrow(RuntimeException("Payment Error"))
+            .`when`(paymentService).createPayment(anyLong(), anyLong())
+
+        val orderId = orderService.processOrder(orderRequests)
+
+        await().atMost(5, TimeUnit.SECONDS)
+            .untilAsserted {
+                val order = orderRepository.findById(orderId).get()
+                assertThat(order.status).isEqualTo(OrderStatus.PAYMENT_FAILED)
+
+                val stock = stockRepository.findByProductId(productId).get()
+                assertThat(stock.quantity).isEqualTo(1)
+
+                val payments = paymentRepository.findAllByOrderId(orderId)
+                assertThat(payments).isEmpty()
+            }
     }
 }

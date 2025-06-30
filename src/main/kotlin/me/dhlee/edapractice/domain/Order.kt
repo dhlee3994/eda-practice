@@ -18,4 +18,8 @@ class Order(
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     var id: Long? = null
+
+    fun paymentFailed() {
+        this.status = OrderStatus.PAYMENT_FAILED
+    }
 }
