@@ -10,7 +10,7 @@ import jakarta.persistence.Table
 @Table(name = "payments")
 @Entity
 class Payment(
-    @Column(nullable = false)
+    @Column(nullable = false, unique = true)
     val orderId: Long,
     @Column(nullable = false)
     val amount: Long,

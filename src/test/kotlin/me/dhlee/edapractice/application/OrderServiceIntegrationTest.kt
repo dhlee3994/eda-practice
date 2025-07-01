@@ -1,5 +1,6 @@
 package me.dhlee.edapractice.application
 
+import me.dhlee.edapractice.PaymentDeadLetterQueue
 import me.dhlee.edapractice.domain.Order
 import me.dhlee.edapractice.domain.OrderLine
 import me.dhlee.edapractice.domain.OrderLineRepository
@@ -13,6 +14,7 @@ import me.dhlee.edapractice.domain.Product
 import me.dhlee.edapractice.domain.ProductRepository
 import me.dhlee.edapractice.domain.Stock
 import me.dhlee.edapractice.domain.StockRepository
+import me.dhlee.edapractice.domain.event.OrderCreatedEvent
 import me.dhlee.edapractice.dto.OrderRequest
 import org.assertj.core.api.Assertions.assertThat
 import org.assertj.core.api.Assertions.assertThatThrownBy
@@ -25,7 +27,10 @@ import org.mockito.Mockito.times
 import org.mockito.Mockito.verify
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.context.SpringBootTest
+import org.springframework.context.ApplicationEventPublisher
 import org.springframework.test.context.bean.override.mockito.MockitoSpyBean
+import org.springframework.transaction.support.TransactionTemplate
+import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
@@ -55,8 +60,15 @@ class OrderServiceIntegrationTest {
     @MockitoSpyBean
     private lateinit var paymentService: PaymentService
 
+    @Autowired
+    private lateinit var paymentDeadLetterQueue: PaymentDeadLetterQueue
+
+    @Autowired
+    private lateinit var eventPublisher: ApplicationEventPublisher
+
     @BeforeEach
     fun setUp() {
+        paymentDeadLetterQueue.clear()
         paymentRepository.deleteAllInBatch()
         orderLineRepository.deleteAllInBatch()
         orderRepository.deleteAllInBatch()
@@ -171,9 +183,6 @@ class OrderServiceIntegrationTest {
         val productId = product.id!!
         stockRepository.save(Stock(productId = productId, quantity = 1))
         priceRepository.save(Price(productId = productId, amount = 1000))
-        val orderRequests = listOf(
-            OrderRequest(productId = productId, quantity = 1),
-        )
         doThrow(RuntimeException("Payment Error"))
             .`when`(paymentService).createPayment(anyLong(), anyLong())
 
@@ -182,13 +191,15 @@ class OrderServiceIntegrationTest {
         await().atMost(15, TimeUnit.SECONDS)
             .untilAsserted {
                 val order = orderRepository.findById(orderId).get()
-                assertThat(order.status).isEqualTo(OrderStatus.PAYMENT_FAILED)
+                assertThat(order.status).isEqualTo(OrderStatus.WAITING_FOR_PAYMENT)
 
                 val stock = stockRepository.findByProductId(productId).get()
-                assertThat(stock.quantity).isEqualTo(1)
+                assertThat(stock.quantity).isEqualTo(0)
 
                 val payments = paymentRepository.findAllByOrderId(orderId)
                 assertThat(payments).isEmpty()
+
+                assertThat(paymentDeadLetterQueue.size()).isEqualTo(1)
 
                 verify(paymentService, times(3)).createPayment(anyLong(), anyLong())
             }
@@ -230,13 +241,15 @@ class OrderServiceIntegrationTest {
         await().atMost(5, TimeUnit.SECONDS)
             .untilAsserted {
                 val order = orderRepository.findById(orderId).get()
-                assertThat(order.status).isEqualTo(OrderStatus.PAYMENT_FAILED)
+                assertThat(order.status).isEqualTo(OrderStatus.WAITING_FOR_PAYMENT)
 
                 val stock = stockRepository.findByProductId(productId).get()
-                assertThat(stock.quantity).isEqualTo(1)
+                assertThat(stock.quantity).isEqualTo(0)
 
                 val payments = paymentRepository.findAllByOrderId(orderId)
                 assertThat(payments).isEmpty()
+
+                assertThat(paymentDeadLetterQueue.size()).isEqualTo(1)
 
                 verify(paymentService, times(1)).createPayment(anyLong(), anyLong())
             }
